@@ -3,6 +3,7 @@
 #include <ros/time.h>
 #include <geometry_msgs/Twist.h>
 #include <std_msgs/Float32MultiArray.h>
+#include <std_msgs/Bool.h>
 #include <Kalman.h>
 #include <math.h>
 #include "I2Cdev.h"
@@ -19,8 +20,8 @@
 //----- Motor Pins and Base Speeds -------------
 #define L_M_ENCODER A0//18
 #define R_M_ENCODER A1//19
-#define L_M_PWM 6
-#define R_M_PWM 5
+#define L_M_PWM 5
+#define R_M_PWM 6
 
 #define LEFT_BASE_MOTOR_SPEED_FWD 15
 #define LEFT_BASE_MOTOR_SPEED_BWD 0
@@ -29,9 +30,10 @@
 //----------------------------------------------
 
 //----- Base angles and angle limits -----------
-#define BASE_ANGLE -0.65//-19.0
+#define BASE_ANGLE_TELEOP -22.10//-19.0
+#define BASE_ANGLE_HUMAN -0.65//-19.0
 #define MAX_ANGLE 20
-#define MIN_ANGLE 0.5
+#define MIN_ANGLE 0.0
 //----------------------------------------------
 
 
@@ -39,9 +41,9 @@
 float linear_vel_error = 0;
 float linear_vel_error_sum = 0;
 float last_linear_vel_error = 0;
-float linear_kp = 5;
+float linear_kp = 1.75;
 float linear_kd = 0;
-float linear_ki = 0.01;
+float linear_ki = 0.25;
 
 float angular_vel_error = 0;
 float angular_vel_error_sum = 0;
@@ -54,7 +56,8 @@ double current_vth = 0;
 double raw_vx;
 double raw_vth;
 
-float base_angle = BASE_ANGLE;
+float base_angle = BASE_ANGLE_TELEOP;
+float base_angle_wrt_mode = BASE_ANGLE_TELEOP;
 int rot_speed = 0;
 
 unsigned long time_1 = 0;
@@ -92,9 +95,9 @@ unsigned long prev_time = 0;
 //--------------------------------------------------------------
 
 //----- PID related --------------------------------------------
-float kp_angle = 14.2;
-float ki_angle = 0.1;
-float kd_angle = 30;
+float kp_angle = 20.5;
+float ki_angle = 0.15;
+float kd_angle = 0;
 
 float prev_angle_error = 0;
 float angle_error_sum = 0;
@@ -113,12 +116,49 @@ double theta = 0.0;
 double vx = 0;
 double vth = 0;
 
+bool teleop_mode = 1; 
+
 void cb(const geometry_msgs::Twist& twist_msg) {
   vx = twist_msg.linear.x;
   vth = twist_msg.angular.z;
 }
 
 ros::Subscriber<geometry_msgs::Twist> sub("/cmd_vel", cb);
+
+void cb_mode(const std_msgs::Bool& msg){
+  bool new_teleop_mode = msg.data;
+  float threshold_mode_change = 1.0;
+  
+  if (new_teleop_mode != teleop_mode){
+    float current_angle = getKalmanAngle();
+    setMotorSpeeds(0,0); // stops motors if the mode has to be changed
+    
+    while(1){
+      if(new_teleop_mode == 1){
+        if(abs(current_angle - BASE_ANGLE_TELEOP)< threshold_mode_change){
+          base_angle_wrt_mode = BASE_ANGLE_TELEOP;
+          Serial3.println("Mode Changed to Teleop");
+          break;
+        }else{
+          current_angle = getKalmanAngle();
+        }
+      }else if(new_teleop_mode == 0){
+        if(abs(current_angle - BASE_ANGLE_HUMAN)< threshold_mode_change){
+          base_angle_wrt_mode = BASE_ANGLE_HUMAN;
+          Serial3.println("Mode Changed to Human Control");
+          break;
+        }else{
+          current_angle = getKalmanAngle();
+        }
+      }
+      Serial3.println(current_angle);
+    }
+    teleop_mode = new_teleop_mode;  
+    
+  }
+}
+
+ros::Subscriber<std_msgs::Bool> sub_mode("/robot_mode", cb_mode);
 //--------------------------------------------------------------
 
 
@@ -129,6 +169,7 @@ void setup()
 
   nh.initNode();
   nh.subscribe(sub);
+  nh.subscribe(sub_mode);
   nh.advertise(ros_pub);
   initRosPub();
 
@@ -150,7 +191,7 @@ void setup()
 
 
   Serial3.println("Initiation Done");
-  wdt_enable(WDTO_250MS);
+//  wdt_enable(WDTO_250MS);
 
   controlLoop();
 
@@ -181,7 +222,7 @@ void controlLoop() {
       last_control_loop_time = millis();
     }
     nh.spinOnce();
-    wdt_reset();
+//    wdt_reset();
   }
 
 }
@@ -234,7 +275,7 @@ void publishOdom() {
   readings.data[5] = pitch_angle;
   readings.data[6] = gyro_rate;
   readings.data[7] = accelerometer_rate;
-  readings.data[8] = dt;
+  readings.data[8] = teleop_mode;//dt;
   ros_pub.publish(&readings);
   //-------------------------------------------------------------------
 }
@@ -272,8 +313,8 @@ void setBaseAngleAndRotation(float *base_angle, int *rot_speed) {
   raw_vx = new_vx;
   raw_vth = new_vth;
   
-  double alpha1 = 0.2;
-  double alpha2 = 0.2;
+  double alpha1 = 0.75;
+  double alpha2 = 0.75;
   current_vx = (1 - alpha1) * current_vx + alpha1 * new_vx;
   current_vth = (1 - alpha2) * current_vth + alpha2 * new_vth;
 
@@ -299,7 +340,7 @@ void setBaseAngleAndRotation(float *base_angle, int *rot_speed) {
   R_M_prop.encoder_count_1 = R_M_prop.encoder_count_2;
 
   
-  *base_angle = BASE_ANGLE + base_angle_change;
+  *base_angle = base_angle_wrt_mode + base_angle_change;
   
   *rot_speed = rot_speed_change;
 
@@ -343,7 +384,7 @@ void pid() {
 
 void updateIMU(){
   kalmanAngle = getKalmanAngle();
-  pitch_angle = kalmanAngle - BASE_ANGLE;
+  pitch_angle = kalmanAngle - base_angle_wrt_mode;
 
 }
 
