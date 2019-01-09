@@ -8,8 +8,8 @@
 #include <math.h>
 #include "I2Cdev.h"
 #include "MPU6050.h"
-#include <avr/wdt.h>
-#include <FlexiTimer2.h>
+//#include <avr/wdt.h>
+//#include <FlexiTimer2.h>
 
 //----- Data for Velocity calculation ----------
 #define CYCLE_ENCODER_COUNT 90.0
@@ -19,20 +19,20 @@
 //----------------------------------------------
 
 //----- Motor Pins and Base Speeds -------------
-#define L_M_ENCODER A0//18
-#define R_M_ENCODER A1//19
-#define L_M_PWM 5
-#define R_M_PWM 6
+#define L_M_ENCODER A1//18
+#define R_M_ENCODER A0//19
+#define L_M_PWM 6
+#define R_M_PWM 5
 
-#define LEFT_BASE_MOTOR_SPEED_FWD 15
+#define LEFT_BASE_MOTOR_SPEED_FWD 0//15
 #define LEFT_BASE_MOTOR_SPEED_BWD 0
-#define RIGHT_BASE_MOTOR_SPEED_FWD 15
+#define RIGHT_BASE_MOTOR_SPEED_FWD 0//15
 #define RIGHT_BASE_MOTOR_SPEED_BWD 0
 //----------------------------------------------
 
 //----- Base angles and angle limits -----------
-#define BASE_ANGLE_TELEOP -26.9//-19.0
-#define BASE_ANGLE_HUMAN -0.65//-19.0
+#define BASE_ANGLE_TELEOP -25.0//-19.0
+#define BASE_ANGLE_HUMAN -1.0//-0.65//-19.0
 #define MAX_ANGLE 20
 #define MIN_ANGLE 0.0
 //----------------------------------------------
@@ -64,6 +64,10 @@ int rot_speed = 0;
 unsigned long time_1 = 0;
 unsigned long time_2 = 0;
 double time_diff = 0;
+
+double alpha1 = 0.75;
+double alpha2 = 0.75;
+  
 //-------------------------------------------------------------
 
 
@@ -90,13 +94,17 @@ Kalman kalman;
 int16_t ax, ay, az;
 int16_t gx, gy, gz;
 double kalmanAngle;
+double lastKalmanAngle;
 double pitch_angle = 0;
 unsigned long prev_time = 0;
 
+int16_t lastGx = 0;
+int16_t lastGy = 0;
+int16_t lastGz = 0;
 //--------------------------------------------------------------
 
 //----- PID related --------------------------------------------
-float kp_angle = 18.5;
+float kp_angle = 20.5;
 float ki_angle = 0.15;
 float kd_angle = 0;
 
@@ -131,32 +139,71 @@ void cb_mode(const std_msgs::Bool& msg) {
   float threshold_mode_change = 1.0;
 
   if (new_teleop_mode != teleop_mode) {
-    float current_angle = getKalmanAngle();
-    FlexiTimer2::stop();  //disables the timer interrupt to stop the pid cycle
+    updateIMU();
+    float current_angle = kalmanAngle;
+    //    FlexiTimer2::stop();  //disables the timer interrupt to stop the pid cycle
     setMotorSpeeds(0, 0); // stops motors if the mode has to be changed
 
     while (1) {
       if (new_teleop_mode == 1) {
         if (abs(current_angle - BASE_ANGLE_TELEOP) < threshold_mode_change) {
           base_angle_wrt_mode = BASE_ANGLE_TELEOP;
+
+          angular_kp = 40;
+          angular_ki = 0.1;
+          linear_kp = 1.75;
+          linear_kd = 0;
+          linear_ki = 0.25;
+
+          kp_angle = 18.5;
+          ki_angle = 0.15;
+          kd_angle = 0;
+
+          alpha1 = 0.75;
+          alpha2 = 0.75;
+
+          linear_vel_error_sum = 0;
+          angular_vel_error_sum = 0;
+          angle_error_sum = 0;
+
           Serial3.println("Mode Changed to Teleop");
           break;
         } else {
-          current_angle = getKalmanAngle();
+          updateIMU();
+          current_angle = kalmanAngle;
         }
       } else if (new_teleop_mode == 0) {
         if (abs(current_angle - BASE_ANGLE_HUMAN) < threshold_mode_change) {
           base_angle_wrt_mode = BASE_ANGLE_HUMAN;
+
+          angular_kp = 60;
+          angular_ki = 0.1;
+          linear_kp = 4.0;
+          linear_kd = 0;
+          linear_ki = 0.1;
+
+          kp_angle = 18.5;
+          ki_angle = 0.15;
+          kd_angle = 0;
+
+          alpha1 = 0.5;
+          alpha2 = 0.1;
+
+          linear_vel_error_sum = 0;
+          angular_vel_error_sum = 0;
+          angle_error_sum = 0;
+
           Serial3.println("Mode Changed to Human Control");
           break;
         } else {
-          current_angle = getKalmanAngle();
+          updateIMU();
+          current_angle = kalmanAngle;
         }
       }
       Serial3.println(current_angle);
     }
     teleop_mode = new_teleop_mode;
-    FlexiTimer2::start(); // re-enables the timer interrupt after changing the mode
+    //    FlexiTimer2::start(); // re-enables the timer interrupt after changing the mode
   }
 }
 
@@ -175,7 +222,7 @@ void setup()
   nh.advertise(ros_pub);
   initRosPub();
 
-  //    Serial.begin(9600);
+//  Serial.begin(9600);
 
   setMotorProperties();
 
@@ -189,52 +236,67 @@ void setup()
   initKalman();
 
   Serial3.begin(9600);
-  // delay(100);
+  delay(100);
 
 
   Serial3.println("Initiation Done");
   //  wdt_enable(WDTO_250MS);
 
-  FlexiTimer2::set(10, TimerInterrupt);    //10ms
-  FlexiTimer2::start();
+  //  FlexiTimer2::set(5, TimerInterrupt);    //5ms
+  //  FlexiTimer2::start();
 
   controlLoop();
 
 }
 
-
+int count = 0;
 void loop()
 {
   //----- for testing -----------------------
-  Serial3.print(getKalmanAngle());
-  Serial3.print("  ");
-  Serial3.println(gz / 131.0);
+  //  Serial3.print(getKalmanAngle());
+  //  Serial3.print("  ");
+  //  Serial3.println(gz / 131.0);
 
-  //  delay(100);
-
+  delay(100);
+  Serial.print(L_M_prop.EncoderCount);
+  Serial.print("  ");
+  Serial.println(L_M_prop.EncoderCount - count);
+  count = L_M_prop.EncoderCount;
 }
 
 void TimerInterrupt() {
-    updateIMU();
-    pid();
-    updateEncoderValues();
+  //  sei();
+  //  updateIMU();
+  //  pid();
+  //  updateEncoderValues();
+  //  Serial3.println("test");
 }
 
 void controlLoop() {
   unsigned long control_loop_time = 100; // milliseconds
   unsigned long last_control_loop_time = 0;
   while (1) {
+    //    unsigned long start = millis();
     //            serial_pid(&kp_angle, &ki_angle, &kd_angle,&base_angle);
-    //    updateIMU();
-    //    pid();
-    //    updateEncoderValues();
+    updateIMU();
+    pid();
+    updateEncoderValues();
     joystick_read();
     if (millis() - last_control_loop_time > control_loop_time) {
       setBaseAngleAndRotation(&base_angle, &rot_speed);
       publishOdom();
+      //      Serial.print(vx);
+      //      Serial.print("  ");
+      //      Serial.println(vth);
       last_control_loop_time = millis();
     }
     nh.spinOnce();
+
+    //    unsigned loop_time = millis() - start;
+
+    //    if (loop_time > 4 ) {
+    //      Serial3.println(loop_time);
+    //    }
     //    wdt_reset();
   }
 
@@ -326,8 +388,6 @@ void setBaseAngleAndRotation(float *base_angle, int *rot_speed) {
   raw_vx = new_vx;
   raw_vth = new_vth;
 
-  double alpha1 = 0.75;
-  double alpha2 = 0.75;
   current_vx = (1 - alpha1) * current_vx + alpha1 * new_vx;
   current_vth = (1 - alpha2) * current_vth + alpha2 * new_vth;
 
@@ -357,10 +417,10 @@ void setBaseAngleAndRotation(float *base_angle, int *rot_speed) {
 
   *rot_speed = rot_speed_change;
 
-  Serial3.print(vx);
+  Serial3.print(kalmanAngle);
   Serial3.print("  ");
-  Serial3.print(vth);
-  Serial3.print("  ");
+  //  Serial3.print(lastKalmanAngle);
+  //  Serial3.print("  ");
   Serial3.print(current_vx);
   Serial3.print("  ");
   Serial3.print(current_vth);
@@ -413,6 +473,11 @@ void pid() {
 void updateIMU() {
   kalmanAngle = getKalmanAngle();
   pitch_angle = kalmanAngle - base_angle_wrt_mode;
+  lastKalmanAngle = kalmanAngle;
+  
+  lastGx = gx;
+  lastGy = gy;
+  lastGz = gz;
 
 }
 
@@ -424,8 +489,16 @@ float getKalmanAngle() {
   prev_time = cur_time;
   double acc_angle = -atan(((double)ax) / ((double)az)) * 180.0 / M_PI;
 
+  if (abs(acc_angle - lastKalmanAngle) > 20) {
+    gx = lastGx;
+    gy = lastGy;
+    gz = lastGz;
+    
+    return lastKalmanAngle;
+  }
+
   if (isnan(acc_angle)) {
-    return base_angle;
+    return lastKalmanAngle;
 
   } else {
     return kalman.getAngle((float)acc_angle, (float)gyro_angle_rate, (float)dt / 1000.0);
@@ -439,6 +512,7 @@ void initKalman() {
   if (isnan(acc_angle)) {
     initKalman();
   } else {
+    lastKalmanAngle  = acc_angle;
     kalman.setAngle(acc_angle);
   }
 }
@@ -461,6 +535,18 @@ void setMotorSpeeds(int LM_Speed, int RM_Speed) {
   } else {
     M2_s = RM_Speed - RIGHT_BASE_MOTOR_SPEED_BWD;
     R_M_prop.direction = -1;
+  }
+
+  if (M1_s > 255) {
+    M1_s = 255;
+  } else if (M1_s < -255) {
+    M1_s = -255;
+  }
+
+  if (M2_s > 255) {
+    M2_s = 255;
+  } else if (M2_s < -255) {
+    M2_s = -255;
   }
 
 
@@ -554,6 +640,8 @@ void joystick_read() {
   float max_vx = 0.4;
   float max_vth = 1.0;
 
+
+
   if (Serial3.available() >= 4) {
     command[0] = Serial3.read();
     if (command[0] == 0xF1) {
@@ -577,6 +665,14 @@ void joystick_read() {
       vth = -(command[2] - 88) / 23.0 * max_vth;
 
     }
+    //    Serial.print(command[0],HEX);
+    //    Serial.print("  ");
+    //    Serial.print(command[1]);
+    //    Serial.print("  ");
+    //    Serial.print(command[2]);
+    //    Serial.print("  ");
+    //    Serial.print(command[3]);
+    //    Serial.println("  ");
   }
 }
 

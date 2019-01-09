@@ -59,8 +59,12 @@ static volatile uint8_t twi_rxBufferIndex;
 
 static volatile uint8_t twi_error;
 
-#define TIMEOUT_MANUAL 50
+#define TIMEOUT_MANUAL_1 20
+#define TIMEOUT_MANUAL_2 3
+#define TIMEOUT_MANUAL_3 20
+#define TIMEOUT_MANUAL_4 2
 
+//Serial.begin(9600);
 /* 
  * Function twi_init
  * Desc     readys twi pins and sets twi bitrate
@@ -159,7 +163,7 @@ uint8_t twi_readFrom(uint8_t address, uint8_t* data, uint8_t length, uint8_t sen
   unsigned long t1 = millis();
   // uint8_t did_timeout = 0;
   while(TWI_READY != twi_state){
-    if((millis() - t1) > TIMEOUT_MANUAL){
+    if((millis() - t1) > TIMEOUT_MANUAL_1){
       // did_timeout = 1;
       // Serial.println("timeout1");
       // twi_disable();
@@ -209,12 +213,12 @@ uint8_t twi_readFrom(uint8_t address, uint8_t* data, uint8_t length, uint8_t sen
   // wait for read operation to complete
   t1 = millis();
   while(TWI_MRX == twi_state){
-    if((millis() - t1) > TIMEOUT_MANUAL){
+    if((millis() - t1) > TIMEOUT_MANUAL_2){
       // did_timeout = 1;
       // Serial.println("timeout2");
-      // twi_stop();
-      // twi_init();
       twi_disable();
+      // twi_init();
+      // twi_disable();
       twi_releaseBus();
       return 0;
       break;
@@ -261,7 +265,7 @@ uint8_t twi_writeTo(uint8_t address, uint8_t* data, uint8_t length, uint8_t wait
   unsigned long t1 = millis();
   // uint8_t did_timeout = 0;
   while(TWI_READY != twi_state){
-    if((millis() - t1) > TIMEOUT_MANUAL){
+    if((millis() - t1) > TIMEOUT_MANUAL_3){
       // did_timeout = 1;
       // Serial.println("timeout");
       return 1;
@@ -315,12 +319,12 @@ uint8_t twi_writeTo(uint8_t address, uint8_t* data, uint8_t length, uint8_t wait
 
   t1 = millis();
   while(wait && (TWI_MTX == twi_state)){
-    if((millis() - t1) > TIMEOUT_MANUAL){
+    if((millis() - t1) > TIMEOUT_MANUAL_4){
       // did_timeout = 1;
       // Serial.println("timeout");
-      // twi_stop();
-      // twi_init();
       twi_disable();
+      // twi_init();
+      // twi_disable();
       twi_releaseBus();
       return 0;
       break;
