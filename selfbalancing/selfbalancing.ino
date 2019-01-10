@@ -19,10 +19,13 @@
 //----------------------------------------------
 
 //----- Motor Pins and Base Speeds -------------
-#define L_M_ENCODER A1//18
-#define R_M_ENCODER A0//19
+#define L_M_ENCODER A0
+#define R_M_ENCODER A1
 #define L_M_PWM 6
-#define R_M_PWM 5
+#define R_M_PWM 7
+
+#define MULTIPLEXER_A 4
+#define MULTIPLEXER_B 5
 
 #define LEFT_BASE_MOTOR_SPEED_FWD 0//15
 #define LEFT_BASE_MOTOR_SPEED_BWD 0
@@ -67,7 +70,7 @@ double time_diff = 0;
 
 double alpha1 = 0.75;
 double alpha2 = 0.75;
-  
+
 //-------------------------------------------------------------
 
 
@@ -213,6 +216,11 @@ ros::Subscriber<std_msgs::Bool> sub_mode("/robot_mode", cb_mode);
 
 void setup()
 {
+  //--initiating_multiplexer_pins----
+  pinMode(MULTIPLEXER_A,OUTPUT);
+  pinMode(MULTIPLEXER_B,OUTPUT);
+  //---------------------------------
+  
   LM.init();
   RM.init();
 
@@ -222,7 +230,7 @@ void setup()
   nh.advertise(ros_pub);
   initRosPub();
 
-//  Serial.begin(9600);
+//    Serial.begin(9600);
 
   setMotorProperties();
 
@@ -238,12 +246,19 @@ void setup()
   Serial3.begin(9600);
   delay(100);
 
-
-  Serial3.println("Initiation Done");
   //  wdt_enable(WDTO_250MS);
 
   //  FlexiTimer2::set(5, TimerInterrupt);    //5ms
   //  FlexiTimer2::start();
+
+  //--enabling_motors_through_multiplexer----
+  digitalWrite(MULTIPLEXER_B,HIGH);
+  //-----------------------------------------
+  
+  Serial3.println("Waiting for base angle....");
+  waitForBaseAngle();
+
+  Serial3.println("Initiation Done");
 
   controlLoop();
 
@@ -256,12 +271,13 @@ void loop()
   //  Serial3.print(getKalmanAngle());
   //  Serial3.print("  ");
   //  Serial3.println(gz / 131.0);
-
-  delay(100);
-  Serial.print(L_M_prop.EncoderCount);
-  Serial.print("  ");
-  Serial.println(L_M_prop.EncoderCount - count);
-  count = L_M_prop.EncoderCount;
+  joystick_read();
+//  updateEncoderValues();
+//  delay(100);
+//  Serial3.println(L_M_prop.EncoderCount);
+//  Serial.print("  ");
+//  Serial.println(L_M_prop.EncoderCount - count);
+//  count = L_M_prop.EncoderCount;
 }
 
 void TimerInterrupt() {
@@ -298,6 +314,33 @@ void controlLoop() {
     //      Serial3.println(loop_time);
     //    }
     //    wdt_reset();
+  }
+
+}
+
+void waitForBaseAngle() {
+  setMotorSpeeds(0, 0);
+  float thold = 1;
+  unsigned long last_publish_time = millis();
+  while (1) {
+    updateIMU();
+    if (teleop_mode == 1) {
+      if (abs(kalmanAngle - BASE_ANGLE_TELEOP) <  thold) {
+        break;
+      }
+    } else if (teleop_mode == 0 ) {
+      if (abs(kalmanAngle - BASE_ANGLE_HUMAN) <  thold) {
+        break;
+      }
+    }
+
+    if(millis() - last_publish_time  > 100){
+      publishOdom();
+      last_publish_time = millis();
+    } 
+    Serial3.print("Current Angle : ");
+    Serial3.println(kalmanAngle);
+    nh.spinOnce();
   }
 
 }
@@ -474,7 +517,7 @@ void updateIMU() {
   kalmanAngle = getKalmanAngle();
   pitch_angle = kalmanAngle - base_angle_wrt_mode;
   lastKalmanAngle = kalmanAngle;
-  
+
   lastGx = gx;
   lastGy = gy;
   lastGz = gz;
@@ -493,7 +536,7 @@ float getKalmanAngle() {
     gx = lastGx;
     gy = lastGy;
     gz = lastGz;
-    
+
     return lastKalmanAngle;
   }
 
@@ -665,14 +708,14 @@ void joystick_read() {
       vth = -(command[2] - 88) / 23.0 * max_vth;
 
     }
-    //    Serial.print(command[0],HEX);
-    //    Serial.print("  ");
-    //    Serial.print(command[1]);
-    //    Serial.print("  ");
-    //    Serial.print(command[2]);
-    //    Serial.print("  ");
-    //    Serial.print(command[3]);
-    //    Serial.println("  ");
+        Serial.print(command[0],HEX);
+        Serial.print("  ");
+        Serial.print(command[1]);
+        Serial.print("  ");
+        Serial.print(command[2]);
+        Serial.print("  ");
+        Serial.print(command[3]);
+        Serial.println("  ");
   }
 }
 
